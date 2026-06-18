@@ -28,10 +28,6 @@
         .card-hover { transition: all 0.2s ease; }
         .card-hover:hover { transform: translateY(-2px); box-shadow: 0 12px 24px -12px rgba(0,0,0,0.12); }
         @media print { body { background: white; } .print-hide { display: none !important; } .shadow-sm, .shadow-md { box-shadow: none !important; border: 1px solid #e2e8f0; } }
-        .loader { width: 32px; height: 32px; border: 3px solid #e2e8f0; border-top-color: #0f172a; border-radius: 50%; animation: spin 0.8s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        
-        /* Ajuste visual para el contenedor de Clerk */
         .cl-rootBox { width: 100%; display: flex; justify-content: center; }
     </style>
 </head>
@@ -144,9 +140,7 @@
     <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
 
     <script type="module">
-        // ---------- FIREBASE CONFIGURATION ----------
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
-        // IMPORTANTE: Se agregó 'where' para filtrar por usuario
         import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 
         const firebaseConfig = {
@@ -162,18 +156,17 @@
         const db = getFirestore(app);
         const garrafaCollection = collection(db, "garrafa");
 
-        // ---------- ESTADO GLOBAL ----------
         let purchases = [];
         let currentFilterMonth = '';
         let currentPage = 1;
         const itemsPerPage = 10;
         let chartInstance = null;
         let unsubscribeSnapshot = null;
+        let isClerkLoaded = false; // Nueva bandera de control
 
         const moneyFormatter = new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 2 });
 
-        // ---------- INTEGRACIÓN CLERK (AUTENTICACIÓN) ----------
-        const CLERK_PUBLISHABLE_KEY = 'pk_test_c2hpbmluZy1yZWluZGVlci05MS5jbGVyay5hY2NvdW50cy5kZXYk'; // <--- ¡Pega aquí tu llave de Clerk!
+        const CLERK_PUBLISHABLE_KEY = 'pk_test_c2hpbmluZy1yZWluZGVlci05MS5jbGVyay5hY2NvdW50cy5kZXYk'; 
 
         async function initClerk() {
             const script = document.createElement('script');
@@ -184,18 +177,17 @@
             
             script.addEventListener('load', async () => {
                 await window.Clerk.load();
+                isClerkLoaded = true; // Confirmamos que cargó
                 
-                // Si el usuario ya está autenticado, cambiar el texto del botón
                 if (window.Clerk.user) {
                     document.getElementById('btn-acceder-txt').textContent = 'Ir a mi panel';
                 }
 
-                // Escuchar cuando el usuario inicie sesión a través del modal
                 window.Clerk.addListener(({ user }) => {
                     const clerkContainer = document.getElementById('clerk-container');
                     if (user && !clerkContainer.classList.contains('hidden')) {
                         clerkContainer.classList.add('hidden');
-                        window.enterApp(true); // Forzar entrada
+                        window.enterApp(true);
                     }
                 });
             });
@@ -207,7 +199,6 @@
             document.getElementById('clerk-container').classList.add('hidden');
         };
 
-        // ---------- UTILS: Toast ----------
         function showToast(message, type = 'success') {
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
@@ -223,15 +214,12 @@
             return `${day}/${month}/${year}`;
         }
 
-        // ---------- SUSCRIPCIÓN EN TIEMPO REAL (AHORA FILTRADA POR USUARIO) ----------
         function initRealtimeListener() {
             if (unsubscribeSnapshot) unsubscribeSnapshot();
             
-            // Verificación de seguridad
             if (!window.Clerk || !window.Clerk.user) return;
             const userId = window.Clerk.user.id;
 
-            // Consultar SOLO las garrafas que le pertenecen a este usuario logueado
             const q = query(garrafaCollection, where("userId", "==", userId));
             
             unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
@@ -247,10 +235,9 @@
                 });
                 purchases = loadedPurchases;
                 updateUI();
-                showToast('Datos sincronizados', 'success');
             }, (error) => {
                 console.error("Error en snapshot:", error);
-                showToast('Error de conexión con Firestore', 'error');
+                showToast('Aviso: Revisa las reglas de seguridad de Firebase', 'error');
             });
         }
 
@@ -340,7 +327,7 @@
             if (chartInstance) chartInstance.destroy();
             chartInstance = new Chart(ctx, {
                 type: 'bar',
-                data: { labels, datasets: [{ label: 'Gasto en garrafas', data: values, backgroundColor: '#1e293b', borderRadius: 8, barPercentage: 0.65 }] },
+                data: { labels, datasets: [{ label: 'Gasto', data: values, backgroundColor: '#1e293b', borderRadius: 8, barPercentage: 0.65 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     plugins: { legend: { display: false }, tooltip: { backgroundColor: '#0f172a', callbacks: { label: (ctx) => moneyFormatter.format(ctx.raw) } } },
@@ -357,11 +344,9 @@
             renderChart();
         }
 
-        // ---------- CRUD FIRESTORE (GUARDAR CON EL ID DEL USUARIO) ----------
         async function savePurchaseToFirestore(event) {
             event.preventDefault();
             
-            // Validar que la sesión esté activa
             if (!window.Clerk || !window.Clerk.user) {
                 showToast('Sesión no válida. Vuelve a ingresar.', 'error');
                 return;
@@ -377,7 +362,6 @@
                 return;
             }
             try {
-                // Preparamos los datos incluyendo el userId de Clerk
                 const dataToSave = { 
                     fecha, 
                     lugar, 
@@ -396,7 +380,7 @@
                 closeModal();
             } catch (error) {
                 console.error(error);
-                showToast('Error al guardar: ' + error.message, 'error');
+                showToast('Error al guardar. Revisa Firebase Rules', 'error');
             }
         }
 
@@ -442,25 +426,27 @@
             updateUI();
         };
 
-        // ---------- CONTROL DE NAVEGACIÓN Y ACCESO ----------
         window.enterApp = (forceUpdate = false) => {
-            if (!window.Clerk || !window.Clerk.isReady) {
-                showToast('Cargando sistema de seguridad...', 'error');
+            if (!isClerkLoaded || !window.Clerk) {
+                showToast('Cargando seguridad... Intenta en un segundo.', 'error');
                 return;
             }
 
             if (window.Clerk.user || forceUpdate) {
-                // El usuario está logueado, entramos a la app
                 document.getElementById('landing-page').classList.add('hidden');
                 document.getElementById('app-page').classList.remove('hidden');
                 
                 if (!unsubscribeSnapshot) initRealtimeListener();
                 else updateUI();
             } else {
-                // No está logueado, abrimos la ventana de inicio de sesión
                 const clerkContainer = document.getElementById('clerk-container');
                 clerkContainer.classList.remove('hidden');
-                window.Clerk.mountSignIn(document.getElementById('sign-in-div'));
+                
+                const signInDiv = document.getElementById('sign-in-div');
+                // Evitar error de montar dos veces el mismo componente
+                if (!signInDiv.hasChildNodes()) {
+                    window.Clerk.mountSignIn(signInDiv);
+                }
             }
         };
 
@@ -468,7 +454,7 @@
             if (window.Clerk) {
                 await window.Clerk.signOut();
             }
-            window.location.reload(); // Recargar limpia la memoria y vuelve al landing
+            window.location.reload(); 
         };
 
         window.openModal = openModal;
@@ -477,11 +463,6 @@
         function escapeHtml(str) { if(!str) return ''; return str.replace(/[&<>]/g, function(m){if(m==='&') return '&amp;'; if(m==='<') return '&lt;'; if(m==='>') return '&gt;'; return m;}); }
 
         window.savePurchase = savePurchaseToFirestore;
-        window.deletePurchase = window.deletePurchase;
-        window.editPurchase = window.editPurchase;
-        window.applyFilter = window.applyFilter;
-        window.clearFilter = window.clearFilter;
-
         document.getElementById('purchase-form').addEventListener('submit', savePurchaseToFirestore);
         
     </script>
